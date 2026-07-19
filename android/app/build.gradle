@@ -1,0 +1,17 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.cineisle.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.cineisle.app'
+        minSdk 23
+        targetSdk 35
+        versionCode 4
+        versionName '0.2.0'
+    }
+}
+
