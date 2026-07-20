@@ -29,18 +29,19 @@ import org.json.*;
 
 public class MainActivity extends Activity {
     private android.widget.FrameLayout fullscreenDanmakuRoot = null;
-    private LinearLayout root, pageHome, pageRoom, pageCard, pageFavorites;
+    private LinearLayout root, pageHome, pageRoom, pageHall, pageCard, pageFavorites;
     private String theme = "night";
     private String serverUrl = "";
     private String token = "";
     private String roomId = "";
     private String name = "观影人A";
+    private String assistantName = "观影助手";
     private String avatar = "🐰";
     private String currentPage = "home";
     private VideoView video;
-    private Button navHome, navRoom, navCard, navFavorites;
-    private TextView roomTitle, roomCodeView, syncState, chatLog, noteLog, cardPreview, memberState, homeStatus, homeSub, heroBadge, fullChatLog, favoritesList, inviteSummary, importState;
-    private EditText serverInput, tokenInput, nameInput, roomInput, chatInput, noteInput, quoteInput, cardNoteInput, linQuoteInput, linNoteInput, inviteMovieInput, invitePartnerInput, inviteMoodInput, inviteNoteInput;
+    private Button navHome, navRoom, navHall, navCard, navFavorites;
+    private TextView roomTitle, roomCodeView, syncState, chatLog, noteLog, cardPreview, memberState, homeStatus, homeSub, heroBadge, fullChatLog, movieLibraryList, favoritesList, inviteSummary, importState;
+    private EditText serverInput, tokenInput, nameInput, assistantNameInput, roomInput, chatInput, noteInput, quoteInput, cardNoteInput, linQuoteInput, linNoteInput, inviteMovieInput, invitePartnerInput, inviteMoodInput, inviteNoteInput;
     private Handler handler = new Handler();
     private boolean polling = false;
     private boolean applyingRemote = false;
@@ -49,12 +50,48 @@ public class MainActivity extends Activity {
     private Dialog fullscreenDialog;
     private String fileName = "";
     private String movieTitle = "";
+    private String currentMovieUri = "";
     private String invitePartner = "观影人 A × 观影人 B";
     private String inviteMood = "夜航";
     private String inviteNote = "今晚一起登岛看一场电影。";
     private String cardTemplate = "ticket";
     private JSONObject remoteCard = null;
+    private TextView contextState, subtitleOverlay;
+    private boolean contextAutoSync = true;
+    private boolean autoScreenshot = false;
     private int lastSentSecond = -1;
+    private int lastContextSecond = -1;
+    private String lastContextSubtitle = "";
+    private String lastSentContextSubtitle = "";
+    private int lastStablePositionMs = 0;
+    private long lastStablePositionAt = 0L;
+    private int fullscreenExitRestoreMs = -1;
+    private boolean fullscreenExitWasPlaying = false;
+    private long fullscreenExitAt = 0L;
+    private final ArrayList<SubtitleCue> subtitleCues = new ArrayList<>();
+    private final ArrayList<MovieItem> movieLibrary = new ArrayList<>();
+
+    private static class SubtitleCue {
+        double start;
+        double end;
+        String text;
+        SubtitleCue(double start, double end, String text) { this.start = start; this.end = end; this.text = text; }
+    }
+
+    private static class MovieItem {
+        String uri;
+        String title;
+        String fileName;
+        long addedAt;
+        int lastPositionMs;
+        MovieItem(String uri, String title, String fileName, long addedAt, int lastPositionMs) {
+            this.uri = uri == null ? "" : uri;
+            this.title = title == null ? "本地影片" : title;
+            this.fileName = fileName == null ? "" : fileName;
+            this.addedAt = addedAt;
+            this.lastPositionMs = Math.max(0, lastPositionMs);
+        }
+    }
 
         private final HashSet<String> seenDanmakuKeys = new HashSet<>();
 private final Runnable poller = new Runnable() {
@@ -78,12 +115,19 @@ private final Runnable poller = new Runnable() {
         serverUrl = sp.getString("serverUrl", "");
         token = sp.getString("token", "");
         name = sp.getString("name", "观影人A");
+        assistantName = sp.getString("assistantName", "观影助手");
         avatar = sp.getString("avatar", "🐰");
         theme = sp.getString("theme", "night");
         invitePartner = sp.getString("invitePartner", "观影人 A × 观影人 B");
         inviteMood = sp.getString("inviteMood", "夜航");
         inviteNote = sp.getString("inviteNote", "今晚一起登岛看一场电影。");
         cardTemplate = sp.getString("cardTemplate", "ticket");
+        contextAutoSync = sp.getBoolean("contextAutoSync", true);
+        autoScreenshot = sp.getBoolean("autoScreenshot", false);
+        lastStablePositionMs = sp.getInt("lastStablePositionMs", 0);
+        lastStablePositionAt = sp.getLong("lastStablePositionAt", 0L);
+        currentMovieUri = sp.getString("currentMovieUri", "");
+        loadMovieLibrary();
     }
 
     private void savePrefs() {
@@ -91,12 +135,20 @@ private final Runnable poller = new Runnable() {
             .putString("serverUrl", serverUrl)
             .putString("token", token)
             .putString("name", name)
+            .putString("assistantName", aiName())
             .putString("avatar", avatar)
             .putString("theme", theme)
             .putString("invitePartner", invitePartner)
             .putString("inviteMood", inviteMood)
             .putString("inviteNote", inviteNote)
             .putString("cardTemplate", cardTemplate)
+            .putBoolean("contextAutoSync", contextAutoSync)
+            .putBoolean("autoScreenshot", autoScreenshot)
+            .putString("roomId", roomId)
+            .putString("currentMovieUri", currentMovieUri)
+            .putInt("lastStablePositionMs", lastStablePositionMs)
+            .putLong("lastStablePositionAt", lastStablePositionAt)
+            .putBoolean("contextPaused", video == null || !video.isPlaying())
             .apply();
     }
 
@@ -266,10 +318,12 @@ private final Runnable poller = new Runnable() {
 
         pageHome = buildHome();
         pageRoom = buildRoom();
+        pageHall = buildHall();
         pageCard = buildCard();
         pageFavorites = buildFavorites();
         frame.addView(pageHome);
         frame.addView(pageRoom);
+        frame.addView(pageHall);
         frame.addView(pageCard);
         frame.addView(pageFavorites);
 
@@ -285,14 +339,17 @@ private final Runnable poller = new Runnable() {
 
         navHome = btn("首页", true);
         navRoom = btn("放映厅", false);
+        navHall = btn("影厅", false);
         navCard = btn("票根", false);
         navFavorites = btn("档案馆", false);
         nav.addView(navHome, new LinearLayout.LayoutParams(0, dp(50), 1));
         nav.addView(navRoom, new LinearLayout.LayoutParams(0, dp(50), 1));
+        nav.addView(navHall, new LinearLayout.LayoutParams(0, dp(50), 1));
         nav.addView(navCard, new LinearLayout.LayoutParams(0, dp(50), 1));
         nav.addView(navFavorites, new LinearLayout.LayoutParams(0, dp(50), 1));
         navHome.setOnClickListener(v -> showPage("home"));
         navRoom.setOnClickListener(v -> showPage("room"));
+        navHall.setOnClickListener(v -> showPage("hall"));
         navCard.setOnClickListener(v -> showPage("card"));
         navFavorites.setOnClickListener(v -> showPage("favorites"));
         updateNav("home");
@@ -310,7 +367,7 @@ private final Runnable poller = new Runnable() {
 
         FrameLayout logo = new FrameLayout(this);
         TextView logoShadow = new TextView(this);
-        logoShadow.setText("映屿 CineIsle");
+        logoShadow.setText("CineIsle");
         logoShadow.setTextSize(30);
         logoShadow.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC));
         logoShadow.setTextColor(color("#55FFFFFF"));
@@ -320,7 +377,7 @@ private final Runnable poller = new Runnable() {
         logo.addView(logoShadow, new FrameLayout.LayoutParams(-1, dp(44)));
 
         TextView logoText = new TextView(this);
-        logoText.setText("映屿 CineIsle");
+        logoText.setText("CineIsle");
         logoText.setTextSize(30);
         logoText.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC));
         logoText.setTextColor(ink());
@@ -330,7 +387,7 @@ private final Runnable poller = new Runnable() {
 
         brand.addView(logo, new LinearLayout.LayoutParams(-1, dp(46)));
 
-        TextView sub = small("CineIsle · a private island for watching together");
+        TextView sub = small("CineIsle · your island for watching together");
         sub.setLetterSpacing(0.04f);
         brand.addView(sub);
         topBar.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
@@ -357,7 +414,7 @@ private final Runnable poller = new Runnable() {
         homeSub = new TextView(this);
         homeSub.setTextColor(color("#EBF0FF"));
         homeSub.setTextSize(13);
-        homeSub.setText("观影邀请卡、同步放映、弹幕时间轴、金句摘录和三套票根模板，都在这里汇成一座观影小岛。");
+        homeSub.setText("本地导入视频，同步播放进度、聊天、弹幕、时间轴笔记、字幕感知和低频画面截图。\n适合自部署的双人共同观影。");
         add(hero, homeSub, -1, -2, 10);
         LinearLayout heroBottom = hbox();
         heroBottom.setGravity(Gravity.CENTER_VERTICAL);
@@ -396,9 +453,9 @@ private final Runnable poller = new Runnable() {
 
         LinearLayout invitePanel = panel();
         invitePanel.addView(tv("今晚的观影邀请卡", 17, Typeface.BOLD));
-        invitePanel.addView(small("这里写的内容会进入房间、观影邀请卡和最终票根。"));
+        invitePanel.addView(small("这里写的内容会进入房间、邀请卡和票根，适合两个人开场前先定好今晚氛围。"));
         inviteMovieInput = input("电影名 / 房间标题", movieTitle);
-        invitePartnerInput = input("观影人，如 A × B", invitePartner);
+        invitePartnerInput = input("观影人，如 观影人 A × 观影人 B", invitePartner);
         inviteMoodInput = input("今晚氛围，如 夜航 / 雨天 / 奶油 / 深蓝", inviteMood);
         inviteNoteInput = input("开场备注", inviteNote);
         inviteNoteInput.setSingleLine(false);
@@ -464,10 +521,12 @@ private final Runnable poller = new Runnable() {
 
         serverInput = input("后端地址，如 https://xxx.onrender.com", serverUrl);
         tokenInput = input("MCP Token，可不填", token);
-        nameInput = input("昵称", name);
+        nameInput = input("你的昵称", name);
+        assistantNameInput = input("AI 名字，如 小G / Claude / 观影搭子", aiName());
         add(outer, serverInput, -1, 48, 14);
         add(outer, tokenInput, -1, 48, 10);
         add(outer, nameInput, -1, 48, 10);
+        add(outer, assistantNameInput, -1, 48, 10);
 
         LinearLayout avatarRow = hbox();
         avatarRow.setGravity(Gravity.CENTER);
@@ -516,8 +575,11 @@ private final Runnable poller = new Runnable() {
             serverUrl = normalizeServer(serverInput.getText().toString());
             token = tokenInput.getText().toString().trim();
             name = nameInput.getText().toString().trim();
+            assistantName = assistantNameInput == null ? assistantName : assistantNameInput.getText().toString().trim();
             if (name.length() == 0) name = "观影人";
+            if (assistantName.length() == 0) assistantName = "观影助手";
             savePrefs();
+            updateServicePrefs();
             dialog.dismiss();
             rebuild();
         });
@@ -598,6 +660,13 @@ private final Runnable poller = new Runnable() {
         video = new VideoView(this);
         try { video.setZOrderOnTop(false); video.setZOrderMediaOverlay(false); } catch(Exception ignored) {}
         videoFrame.addView(video, new FrameLayout.LayoutParams(-1, -1));
+        subtitleOverlay = small("");
+        subtitleOverlay.setTextColor(Color.WHITE);
+        subtitleOverlay.setGravity(Gravity.CENTER);
+        subtitleOverlay.setTextSize(15);
+        subtitleOverlay.setPadding(dp(12), dp(8), dp(12), dp(8));
+        subtitleOverlay.setBackground(round(color("#99000000"), 18));
+        subtitleOverlay.setVisibility(View.GONE);
         LinearLayout overlay = vbox();
         overlay.setGravity(Gravity.CENTER);
         overlay.setTag("video_overlay");
@@ -613,6 +682,9 @@ private final Runnable poller = new Runnable() {
         overlay.addView(empty);
         add(overlay, hint, -1, -2, 8);
         videoFrame.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+        FrameLayout.LayoutParams subLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        subLp.setMargins(dp(16), 0, dp(16), dp(18));
+        videoFrame.addView(subtitleOverlay, subLp);
         add(c, videoFrame, -1, 250, 16);
 
         MediaController mc = new MediaController(this);
@@ -631,6 +703,34 @@ private final Runnable poller = new Runnable() {
         LinearLayout.LayoutParams fx = new LinearLayout.LayoutParams(0, dp(46), 1); fx.setMargins(dp(8),0,0,0);
         actions.addView(fullscreen, fx);
         add(c, actions, -1, 46, 12);
+
+        LinearLayout senseP = panel();
+        senseP.addView(tv(aiName() + "感知", 18, Typeface.BOLD));
+        senseP.addView(small("同步片名、进度、当前字幕和最近字幕；低频画面截图可交给无障碍服务自动上传，只在你打开开关后启用。"));
+        contextState = small(contextStatusText());
+        contextState.setTextColor(ink());
+        contextState.setBackground(round(cardSoft(), 20));
+        contextState.setPadding(dp(14), dp(12), dp(14), dp(12));
+        add(senseP, contextState, -1, -2, 10);
+        LinearLayout senseRow1 = hbox();
+        Button pickSubtitle = btn("导入字幕", false);
+        Button contextToggle = btn(contextAutoSync ? "字幕感知 ON" : "字幕感知 OFF", contextAutoSync);
+        senseRow1.addView(pickSubtitle, new LinearLayout.LayoutParams(0, dp(44), 1));
+        LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(0, dp(44), 1); stLp.setMargins(dp(8),0,0,0);
+        senseRow1.addView(contextToggle, stLp);
+        add(senseP, senseRow1, -1, 44, 10);
+        LinearLayout senseRow2 = hbox();
+        Button screenshotToggle = btn(autoScreenshot ? "自动截图 ON" : "自动截图 OFF", autoScreenshot);
+        Button a11y = btn("开启无障碍", false);
+        senseRow2.addView(screenshotToggle, new LinearLayout.LayoutParams(0, dp(44), 1));
+        LinearLayout.LayoutParams ayLp = new LinearLayout.LayoutParams(0, dp(44), 1); ayLp.setMargins(dp(8),0,0,0);
+        senseRow2.addView(a11y, ayLp);
+        add(senseP, senseRow2, -1, 44, 8);
+        LinearLayout senseRow3 = hbox();
+        Button snapNow = btn("立即截图一次", false);
+        senseRow3.addView(snapNow, new LinearLayout.LayoutParams(-1, dp(44)));
+        add(senseP, senseRow3, -1, 44, 8);
+        add(c, senseP, -1, -2, 14);
 
         LinearLayout chatP = panel();
         chatP.addView(tv("岛上留言与弹幕雨", 18, Typeface.BOLD));
@@ -678,6 +778,28 @@ private final Runnable poller = new Runnable() {
         sync.setOnClickListener(v -> sendPlayback(true));
         danmaku.setOnClickListener(v -> { danmakuOn = !danmakuOn; danmaku.setText(danmakuOn ? "弹幕 ON" : "弹幕 OFF"); });
         fullscreen.setOnClickListener(v -> openCinemaFullscreen());
+        pickSubtitle.setOnClickListener(v -> pickSubtitleFile());
+        contextToggle.setOnClickListener(v -> {
+            contextAutoSync = !contextAutoSync;
+            savePrefs();
+            updateServicePrefs();
+            rebuild();
+            toast(contextAutoSync ? "字幕感知已开启" : "字幕感知已关闭");
+            if (contextAutoSync) sendCinemaContext(true);
+        });
+        screenshotToggle.setOnClickListener(v -> {
+            autoScreenshot = !autoScreenshot;
+            savePrefs();
+            updateServicePrefs();
+            rebuild();
+            toast(autoScreenshot ? "自动低频截图已开启，记得打开无障碍服务" : "自动低频截图已关闭");
+        });
+        a11y.setOnClickListener(v -> {
+            updateServicePrefs();
+            try { startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
+            catch(Exception e) { toast("无法打开无障碍设置"); }
+        });
+        snapNow.setOnClickListener(v -> requestLocalScreenshotNow());
         sendChat.setOnClickListener(v -> sendMessage(false));
         sendDm.setOnClickListener(v -> sendMessage(true));
         addNote.setOnClickListener(v -> sendNote());
@@ -686,7 +808,19 @@ private final Runnable poller = new Runnable() {
         video.setOnPreparedListener(mp -> {
             View e = videoFrame.findViewWithTag("video_overlay");
             if (e != null) e.setVisibility(View.GONE);
+            updateViewingContext(false);
+            if (lastStablePositionMs > 1500) {
+                final int restoreMs = lastStablePositionMs;
+                handler.postDelayed(() -> {
+                    try {
+                        if (video != null && video.getDuration() > 0 && video.getCurrentPosition() < 1000 && restoreMs > 1500) {
+                            video.seekTo(restoreMs);
+                        }
+                    } catch(Exception ignored) {}
+                }, 350);
+            }
             sendMovieInfo();
+            sendCinemaContext(true);
         });
         video.setOnCompletionListener(mp -> sendPlayback(true));
         video.setOnClickListener(v -> sendPlayback(false));
@@ -694,16 +828,84 @@ private final Runnable poller = new Runnable() {
         handler.postDelayed(new Runnable() {
             @Override public void run() {
                 if (!applyingRemote && roomId.length() > 0 && video.getDuration() > 0) {
-                    int sec = video.getCurrentPosition() / 1000;
+                    rememberPlaybackPosition();
+                    int sec = outboundPositionMs() / 1000;
+                    updateViewingContext(false);
                     if (sec != lastSentSecond) {
                         lastSentSecond = sec;
                         sendPlayback(false);
                     }
+                    sendCinemaContext(false);
                 }
                 handler.postDelayed(this, 3000);
             }
         }, 3000);
 
+        return wrap;
+    }
+
+
+    private LinearLayout buildHall() {
+        LinearLayout wrap = vbox();
+        wrap.setPadding(dp(16), topInset() + dp(8), dp(16), dp(12));
+        LinearLayout c = vbox();
+        wrap.addView(scroll(c), new LinearLayout.LayoutParams(-1, -1));
+        TextView title = tv("影厅", 30, Typeface.BOLD);
+        c.addView(title);
+        c.addView(small("这里保存本机导入过的影片。影片文件不会上传，只保存本机 URI，之后想重看可以直接从这里打开。"));
+
+        LinearLayout top = hbox();
+        Button importMovie = btn("导入新影片", true);
+        Button refresh = btn("刷新影厅", false);
+        top.addView(importMovie, new LinearLayout.LayoutParams(0, dp(44), 1));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(0, dp(44), 1); rlp.setMargins(dp(8),0,0,0);
+        top.addView(refresh, rlp);
+        add(c, top, -1, 44, 14);
+        importMovie.setOnClickListener(v -> pickVideo());
+        refresh.setOnClickListener(v -> { loadMovieLibrary(); rebuild(); showPage("hall"); });
+
+        LinearLayout p = panel();
+        p.addView(tv("本机片库", 18, Typeface.BOLD));
+        movieLibraryList = tv("影厅还空着。导入一部影片后会自动出现在这里。", 14, Typeface.NORMAL);
+        movieLibraryList.setTextColor(ink());
+        movieLibraryList.setPadding(dp(14), dp(14), dp(14), dp(14));
+        movieLibraryList.setBackground(round(cardSoft(), 20));
+        add(p, movieLibraryList, -1, -2, 10);
+
+        int count = Math.min(movieLibrary.size(), 8);
+        for (int i=0; i<count; i++) {
+            final MovieItem item = movieLibrary.get(i);
+            LinearLayout row = hbox();
+            Button open = btn("打开", i == 0);
+            TextView info = small((i+1) + ". " + item.title + (item.lastPositionMs > 1000 ? " · 上次 " + formatTime(item.lastPositionMs/1000) : ""));
+            info.setTextColor(ink());
+            info.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(info, new LinearLayout.LayoutParams(0, dp(46), 1));
+            LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(dp(86), dp(42)); olp.setMargins(dp(8),0,0,0);
+            row.addView(open, olp);
+            add(p, row, -1, 46, 8);
+            open.setOnClickListener(v -> openMovieFromLibrary(item));
+        }
+
+        LinearLayout bottom = hbox();
+        Button openLast = btn("打开最近影片", false);
+        Button clear = btn("清空影厅记录", false);
+        bottom.addView(openLast, new LinearLayout.LayoutParams(0, dp(44), 1));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, dp(44), 1); clp.setMargins(dp(8),0,0,0);
+        bottom.addView(clear, clp);
+        add(p, bottom, -1, 44, 12);
+        openLast.setOnClickListener(v -> {
+            if (movieLibrary.size() == 0) toast("影厅还没有影片");
+            else openMovieFromLibrary(movieLibrary.get(0));
+        });
+        clear.setOnClickListener(v -> {
+            movieLibrary.clear();
+            saveMovieLibrary();
+            refreshMovieLibrary();
+            toast("已清空影厅记录，本地影片文件不会被删除");
+        });
+        add(c, p, -1, -2, 16);
+        refreshMovieLibrary();
         return wrap;
     }
 
@@ -750,9 +952,9 @@ private final Runnable poller = new Runnable() {
         tplPostcard.setOnClickListener(v -> setCardTemplate("postcard"));
 
         quoteInput = input("观影人A最喜欢的台词", "");
-        linQuoteInput = input("观影人B最喜欢的台词", "");
-        cardNoteInput = input("观影人A的观后感", "");
-        linNoteInput = input("观影人B的观后感", "");
+        linQuoteInput = input(aiName() + "摘录的台词", "");
+        cardNoteInput = input("我的观后感", "");
+        linNoteInput = input(aiName() + "的观影札记", "");
         cardNoteInput.setSingleLine(false);
         linNoteInput.setSingleLine(false);
         add(p, quoteInput, -1, 48, 12);
@@ -820,6 +1022,121 @@ private final Runnable poller = new Runnable() {
         return wrap;
     }
 
+
+    private void loadMovieLibrary() {
+        movieLibrary.clear();
+        String raw = getSharedPreferences("cineisle", 0).getString("movieLibrary", "[]");
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i=0; i<arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String uri = o.optString("uri", "");
+                if (uri.length() == 0) continue;
+                movieLibrary.add(new MovieItem(
+                        uri,
+                        o.optString("title", "本地影片"),
+                        o.optString("fileName", ""),
+                        o.optLong("addedAt", System.currentTimeMillis()),
+                        o.optInt("lastPositionMs", 0)
+                ));
+            }
+        } catch(Exception ignored) {}
+    }
+
+    private void saveMovieLibrary() {
+        try {
+            JSONArray arr = new JSONArray();
+            for (MovieItem item: movieLibrary) {
+                JSONObject o = new JSONObject();
+                o.put("uri", item.uri);
+                o.put("title", item.title);
+                o.put("fileName", item.fileName);
+                o.put("addedAt", item.addedAt);
+                o.put("lastPositionMs", item.lastPositionMs);
+                arr.put(o);
+            }
+            getSharedPreferences("cineisle", 0).edit().putString("movieLibrary", arr.toString()).apply();
+        } catch(Exception ignored) {}
+    }
+
+    private void rememberMovieInLibrary(Uri uri, String title, String displayName) {
+        if (uri == null) return;
+        String uriText = uri.toString();
+        MovieItem found = null;
+        for (MovieItem item: movieLibrary) {
+            if (item.uri.equals(uriText)) { found = item; break; }
+        }
+        if (found != null) {
+            found.title = title;
+            found.fileName = displayName;
+            found.addedAt = System.currentTimeMillis();
+            movieLibrary.remove(found);
+            movieLibrary.add(0, found);
+        } else {
+            movieLibrary.add(0, new MovieItem(uriText, title, displayName, System.currentTimeMillis(), 0));
+        }
+        while (movieLibrary.size() > 30) movieLibrary.remove(movieLibrary.size() - 1);
+        currentMovieUri = uriText;
+        saveMovieLibrary();
+        savePrefs();
+        refreshMovieLibrary();
+    }
+
+    private void updateCurrentMovieProgress() {
+        if (currentMovieUri == null || currentMovieUri.length() == 0 || lastStablePositionMs <= 1000) return;
+        for (MovieItem item: movieLibrary) {
+            if (item.uri.equals(currentMovieUri)) {
+                item.lastPositionMs = lastStablePositionMs;
+                saveMovieLibrary();
+                break;
+            }
+        }
+    }
+
+    private void refreshMovieLibrary() {
+        if (movieLibraryList == null) return;
+        if (movieLibrary.size() == 0) {
+            movieLibraryList.setText("影厅还空着。导入一部影片后会自动出现在这里。");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i=0; i<movieLibrary.size(); i++) {
+            MovieItem item = movieLibrary.get(i);
+            if (i > 0) sb.append("\n");
+            sb.append(i+1).append(". ").append(item.title);
+            if (item.lastPositionMs > 1000) sb.append(" · 上次 ").append(formatTime(item.lastPositionMs/1000));
+        }
+        movieLibraryList.setText(sb.toString());
+    }
+
+    private void openMovieFromLibrary(MovieItem item) {
+        if (item == null || item.uri.length() == 0 || video == null) return;
+        try {
+            Uri uri = Uri.parse(item.uri);
+            currentMovieUri = item.uri;
+            fileName = item.fileName.length() > 0 ? item.fileName : getName(uri);
+            movieTitle = item.title.length() > 0 ? item.title : fileName.replaceFirst("\\.[^.]+$", "");
+            lastStablePositionMs = Math.max(0, item.lastPositionMs);
+            lastStablePositionAt = System.currentTimeMillis();
+            video.setVideoURI(uri);
+            View e = videoFrame == null ? null : videoFrame.findViewWithTag("video_overlay");
+            if (e != null) e.setVisibility(View.GONE);
+            if (roomTitle != null) roomTitle.setText((roomId.length() > 0 ? "正在放映 · " : "正在预览 · ") + movieTitle);
+            showPage("room");
+            savePrefs();
+            updateHeroTexts();
+            toast("已从影厅打开：" + movieTitle);
+            handler.postDelayed(() -> {
+                try { if (video != null && lastStablePositionMs > 1500) video.seekTo(lastStablePositionMs); } catch(Exception ignored) {}
+            }, 500);
+            sendMovieInfo();
+            sendCinemaContext(true);
+        } catch(Exception e) {
+            toast("打开失败：可能是系统收回了文件权限，请重新导入影片");
+        }
+    }
+
     private GradientDrawable ticketBg() {
         GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, cardCardColors());
         g.setCornerRadius(dp(28));
@@ -829,6 +1146,15 @@ private final Runnable poller = new Runnable() {
 
     private String safeText(EditText e) {
         return e == null ? "" : e.getText().toString().trim();
+    }
+
+    private String aiName() {
+        String v = assistantName == null ? "" : assistantName.trim();
+        return v.length() > 0 ? v : "观影助手";
+    }
+
+    private String aiPeekText() {
+        return "给" + aiName() + "看一眼";
     }
 
     private String currentTicketText() {
@@ -877,10 +1203,10 @@ private final Runnable poller = new Runnable() {
                 "氛围｜" + mood + "\n" +
                 "主题｜" + themeLabel() + "\n\n" +
                 "邀请卡\n" + invite + "\n\n" +
-                "观影人A喜欢的台词\n「" + zq + "」\n\n" +
-                "观影人B喜欢的台词\n「" + lq + "」\n\n" +
-                "观影人A的观后感\n" + zn + "\n\n" +
-                "观影人B的观后感\n" + ln + "\n\n" +
+                "我的高光台词\n「" + zq + "」\n\n" +
+                aiName() + "摘录的台词\n「" + lq + "」\n\n" +
+                "我的观后感\n" + zn + "\n\n" +
+                aiName() + "的观影札记\n" + ln + "\n\n" +
                 "时间轴笔记\n" + notes + "\n\n" +
                 "— watch together · CineIsle";
 }
@@ -1032,6 +1358,7 @@ private final Runnable poller = new Runnable() {
                 body.put("rating", 4.5);
                 body.put("template", cardTemplate);
                 body.put("partner", invitePartner);
+                body.put("assistantName", aiName());
                 body.put("mood", inviteMood);
                 body.put("inviteNote", inviteNote);
                 body.put("quote", zq.length() > 0 ? zq : (lq.length() > 0 ? lq : "这一幕被我们一起看见了。"));
@@ -1075,18 +1402,21 @@ private final Runnable poller = new Runnable() {
         currentPage = page;
         pageHome.setVisibility(page.equals("home") ? View.VISIBLE : View.GONE);
         pageRoom.setVisibility(page.equals("room") ? View.VISIBLE : View.GONE);
+        pageHall.setVisibility(page.equals("hall") ? View.VISIBLE : View.GONE);
         pageCard.setVisibility(page.equals("card") ? View.VISIBLE : View.GONE);
         pageFavorites.setVisibility(page.equals("favorites") ? View.VISIBLE : View.GONE);
         updateNav(page);
         if (page.equals("room") && roomId.length() > 0) startPolling();
         if (page.equals("card") && roomId.length() > 0) fetchRoom();
+        if (page.equals("hall")) refreshMovieLibrary();
         if (page.equals("favorites")) refreshFavorites();
     }
 
     private void updateNav(String page) {
-        if (navHome == null || navRoom == null || navCard == null || navFavorites == null) return;
+        if (navHome == null || navRoom == null || navHall == null || navCard == null || navFavorites == null) return;
         styleNav(navHome, page.equals("home"));
         styleNav(navRoom, page.equals("room"));
+        styleNav(navHall, page.equals("hall"));
         styleNav(navCard, page.equals("card"));
         styleNav(navFavorites, page.equals("favorites"));
     }
@@ -1100,6 +1430,7 @@ private final Runnable poller = new Runnable() {
     private void collectSettings() {
         serverUrl = normalizeServer(serverUrl);
         if (name.length() == 0) name = "观影人";
+        if (assistantName == null || assistantName.trim().length() == 0) assistantName = "观影助手";
         savePrefs();
     }
 
@@ -1148,6 +1479,7 @@ private final Runnable poller = new Runnable() {
             try {
                 JSONObject body = new JSONObject();
                 body.put("name", name);
+                body.put("assistantName", aiName());
                 body.put("theme", theme);
                 if (movieTitle.length() > 0) body.put("title", movieTitle);
                 body.put("partner", invitePartner);
@@ -1168,7 +1500,9 @@ private final Runnable poller = new Runnable() {
         updateHeroTexts();
         showPage("room");
         startPolling();
+        updateServicePrefs();
         fetchRoom();
+        sendCinemaContext(true);
         toast("已进入房间 " + roomId);
     }
 
@@ -1179,15 +1513,393 @@ private final Runnable poller = new Runnable() {
         }
     }
 
+
+    private String contextStatusText() {
+        String sub = subtitleCues.size() > 0 ? ("已载入 " + subtitleCues.size() + " 条字幕") : "未导入字幕";
+        String screen = autoScreenshot ? "自动低频截图：ON（需无障碍服务已开启）" : "自动低频截图：OFF";
+        String cur = lastContextSubtitle.length() > 0 ? "\n当前字幕：" + lastContextSubtitle : "";
+        String shotStatus = getSharedPreferences("cineisle", 0).getString("lastScreenshotStatus", "");
+        String shot = shotStatus.length() > 0 ? "\n截图状态：" + shotStatus : "";
+        return sub + " · " + (contextAutoSync ? "字幕感知：ON" : "字幕感知：OFF") + "\n" + screen + cur + shot;
+    }
+
+    private void updateServicePrefs() {
+        android.content.SharedPreferences.Editor e = getSharedPreferences("cineisle", 0).edit();
+        e.putString("serverUrl", serverUrl);
+        e.putString("token", token);
+        e.putString("roomId", roomId);
+        e.putString("name", name);
+        e.putString("assistantName", aiName());
+        e.putBoolean("autoScreenshot", autoScreenshot);
+        e.putBoolean("contextAutoSync", contextAutoSync);
+        e.putBoolean("contextPaused", video == null || !video.isPlaying());
+        e.putLong("contextUpdatedAt", System.currentTimeMillis());
+        e.apply();
+    }
+
+    private void requestLocalScreenshotNow() {
+        autoScreenshot = true;
+        savePrefs();
+        long requestId = System.currentTimeMillis();
+        android.content.SharedPreferences.Editor e = getSharedPreferences("cineisle", 0).edit();
+        e.putBoolean("autoScreenshot", true);
+        e.putLong("screenshotRequestId", requestId);
+        e.putString("lastScreenshotStatus", "已请求" + aiName() + "看一眼，等待无障碍服务上传");
+        e.apply();
+        updateServicePrefs();
+        if (contextState != null) contextState.setText(contextStatusText());
+        toast("已请求" + aiName() + "看一眼，保持映屿在前台");
+    }
+
+
+    private void rememberPlaybackPosition() {
+        try {
+            if (video == null || video.getDuration() <= 0) return;
+            int pos = video.getCurrentPosition();
+            if (pos > 1000) {
+                lastStablePositionMs = pos;
+                lastStablePositionAt = System.currentTimeMillis();
+                getSharedPreferences("cineisle", 0).edit()
+                        .putInt("lastStablePositionMs", lastStablePositionMs)
+                        .putLong("lastStablePositionAt", lastStablePositionAt)
+                        .apply();
+                updateCurrentMovieProgress();
+            }
+        } catch(Exception ignored) {}
+    }
+
+    private int outboundPositionMs() {
+        try {
+            if (video == null) return Math.max(0, lastStablePositionMs);
+            int pos = video.getCurrentPosition();
+            long now = System.currentTimeMillis();
+            // 横屏退出/竖屏恢复的几秒内，VideoView 偶尔会短暂回报 0；不要让这个 0 覆盖后端。
+            if (pos < 1000 && lastStablePositionMs > 5000 && now - lastStablePositionAt < 15000) {
+                return lastStablePositionMs;
+            }
+            if (pos > 1000) {
+                lastStablePositionMs = pos;
+                lastStablePositionAt = now;
+            }
+            return Math.max(0, pos);
+        } catch(Exception e) {
+            return Math.max(0, lastStablePositionMs);
+        }
+    }
+
+    private void forceRestoreAfterFullscreen(final int posMs, final boolean shouldPlay) {
+        if (video == null || posMs <= 1000) return;
+        fullscreenExitRestoreMs = posMs;
+        fullscreenExitWasPlaying = shouldPlay;
+        fullscreenExitAt = System.currentTimeMillis();
+        lastStablePositionMs = posMs;
+        lastStablePositionAt = fullscreenExitAt;
+        savePrefs();
+        for (int delay: new int[]{120, 450, 1000, 1800}) {
+            handler.postDelayed(() -> {
+                try {
+                    if (video == null || fullscreenExitRestoreMs <= 1000) return;
+                    if (video.getCurrentPosition() < 1000 || Math.abs(video.getCurrentPosition() - fullscreenExitRestoreMs) > 1500) {
+                        video.seekTo(fullscreenExitRestoreMs);
+                    }
+                    if (fullscreenExitWasPlaying && !video.isPlaying()) video.start();
+                    updateViewingContext(true);
+                } catch(Exception ignored) {}
+            }, delay);
+        }
+    }
+
+    private void pickSubtitleFile() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+            "*/*",
+            "text/*",
+            "application/x-subrip",
+            "application/octet-stream",
+            "application/x-ass",
+            "application/x-ssa"
+        });
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(i, 1002);
+    }
+
+    private void loadSubtitleFile(Uri uri) {
+        new Thread(() -> {
+            try {
+                String fileDisplayName = getName(uri);
+                String text = readTextUri(uri);
+                ArrayList<SubtitleCue> cues = parseSubtitleText(text);
+                String detected = detectSubtitleFormat(fileDisplayName, text);
+                final String finalName = fileDisplayName;
+                final String finalDetected = detected;
+                runOnUiThread(() -> {
+                    subtitleCues.clear();
+                    subtitleCues.addAll(cues);
+                    updateViewingContext(true);
+                    if (cues.size() > 0) {
+                        toast("字幕已导入：" + cues.size() + " 条（" + finalDetected + "）");
+                    } else {
+                        toast("字幕导入 0 条：" + subtitleImportHint(finalName, finalDetected));
+                    }
+                    sendCinemaContext(true);
+                });
+            } catch(Exception e) {
+                runOnUiThread(() -> toast("字幕导入失败：" + e.getMessage()));
+            }
+        }).start();
+    }
+
+    private String readTextUri(Uri uri) throws Exception {
+        InputStream in = getContentResolver().openInputStream(uri);
+        if (in == null) throw new IOException("无法读取文件");
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        in.close();
+        byte[] data = bos.toByteArray();
+        String text;
+        if (data.length >= 3 && (data[0] & 0xff) == 0xef && (data[1] & 0xff) == 0xbb && (data[2] & 0xff) == 0xbf) {
+            text = new String(data, 3, data.length - 3, "UTF-8");
+        } else if (data.length >= 2 && (data[0] & 0xff) == 0xff && (data[1] & 0xff) == 0xfe) {
+            text = new String(data, 2, data.length - 2, "UTF-16LE");
+        } else if (data.length >= 2 && (data[0] & 0xff) == 0xfe && (data[1] & 0xff) == 0xff) {
+            text = new String(data, 2, data.length - 2, "UTF-16BE");
+        } else {
+            text = new String(data, "UTF-8");
+            ArrayList<SubtitleCue> utf8Probe = parseSubtitleText(text);
+            if (utf8Probe.size() == 0 && text.indexOf('�') >= 0) {
+                try {
+                    String gb = new String(data, "GB18030");
+                    if (parseSubtitleText(gb).size() > 0 || gb.indexOf('�') < text.indexOf('�')) text = gb;
+                } catch(Exception ignored) {}
+            }
+        }
+        if (text.length() > 0 && text.charAt(0) == '\ufeff') text = text.substring(1);
+        return text;
+    }
+
+    private String detectSubtitleFormat(String name, String text) {
+        String lower = name == null ? "" : name.toLowerCase(Locale.US);
+        if (lower.endsWith(".ass") || lower.endsWith(".ssa") || (text != null && text.contains("[Events]") && text.contains("Dialogue:"))) return "ASS/SSA";
+        if (lower.endsWith(".vtt") || (text != null && text.trim().startsWith("WEBVTT"))) return "VTT";
+        if (lower.endsWith(".srt") || (text != null && text.contains("-->"))) return "SRT";
+        return "未知格式";
+    }
+
+    private String subtitleImportHint(String name, String detected) {
+        String lower = name == null ? "" : name.toLowerCase(Locale.US);
+        if (lower.endsWith(".rar") || lower.endsWith(".zip") || lower.endsWith(".7z")) return "这是压缩包，请先解压出 .srt/.vtt/.ass";
+        if ("ASS/SSA".equals(detected)) return "已识别 ASS，但没有 Dialogue 台词，可能文件损坏或不是字幕";
+        if ("未知格式".equals(detected)) return "不是标准 SRT/VTT/ASS，换一个字幕文件试试";
+        return "时间轴或正文为空，可能编码异常或字幕文件不匹配";
+    }
+
+    private ArrayList<SubtitleCue> parseSubtitleText(String raw) {
+        ArrayList<SubtitleCue> cues = new ArrayList<>();
+        if (raw == null) return cues;
+        String trimmed = raw.trim();
+        if (trimmed.contains("[Events]") && trimmed.contains("Dialogue:")) {
+            cues.addAll(parseAssSubtitleText(raw));
+        }
+        if (cues.size() == 0) cues.addAll(parseSrtVttSubtitleText(raw));
+        Collections.sort(cues, (a,b) -> Double.compare(a.start, b.start));
+        return cues;
+    }
+
+    private ArrayList<SubtitleCue> parseSrtVttSubtitleText(String raw) {
+        ArrayList<SubtitleCue> cues = new ArrayList<>();
+        if (raw == null) return cues;
+        String text = raw.replace("\r", "").replace("WEBVTT", "");
+        String[] blocks = text.split("\\n\\s*\\n");
+        for (String block: blocks) {
+            String[] lines = block.trim().split("\n");
+            if (lines.length == 0) continue;
+            int timeIdx = -1;
+            for (int i=0; i<lines.length; i++) {
+                if (lines[i].contains("-->")) { timeIdx = i; break; }
+            }
+            if (timeIdx < 0) continue;
+            String[] parts = lines[timeIdx].split("-->");
+            if (parts.length < 2) continue;
+            double start = parseSubtitleTime(parts[0]);
+            double end = parseSubtitleTime(parts[1].split("\\s+")[0]);
+            StringBuilder sb = new StringBuilder();
+            for (int i=timeIdx+1; i<lines.length; i++) {
+                String line = cleanSubtitleLine(lines[i]);
+                if (line.length() == 0 || line.startsWith("NOTE")) continue;
+                if (sb.length() > 0) sb.append(" / ");
+                sb.append(line);
+            }
+            if (end > start && sb.length() > 0) cues.add(new SubtitleCue(start, end, sb.toString()));
+        }
+        return cues;
+    }
+
+    private ArrayList<SubtitleCue> parseAssSubtitleText(String raw) {
+        ArrayList<SubtitleCue> cues = new ArrayList<>();
+        if (raw == null) return cues;
+        String text = raw.replace("\r", "");
+        String[] lines = text.split("\n");
+        int startIdx = 1, endIdx = 2, textIdx = -1, fieldCount = 10;
+        boolean inEvents = false;
+        for (String originalLine: lines) {
+            String line = originalLine.trim();
+            if (line.length() == 0) continue;
+            if (line.startsWith("[") && line.endsWith("]")) {
+                inEvents = line.equalsIgnoreCase("[Events]");
+                continue;
+            }
+            if (!inEvents) continue;
+            if (line.toLowerCase(Locale.US).startsWith("format:")) {
+                String[] fields = line.substring(line.indexOf(':') + 1).split(",");
+                fieldCount = fields.length;
+                for (int i=0; i<fields.length; i++) {
+                    String f = fields[i].trim().toLowerCase(Locale.US);
+                    if (f.equals("start")) startIdx = i;
+                    else if (f.equals("end")) endIdx = i;
+                    else if (f.equals("text")) textIdx = i;
+                }
+                continue;
+            }
+            if (!line.toLowerCase(Locale.US).startsWith("dialogue:")) continue;
+            String payload = line.substring(line.indexOf(':') + 1).trim();
+            int maxParts = Math.max(fieldCount, 10);
+            String[] parts = payload.split(",", maxParts);
+            if (parts.length <= Math.max(startIdx, endIdx)) continue;
+            if (textIdx < 0) textIdx = Math.min(9, parts.length - 1);
+            if (parts.length <= textIdx) continue;
+            double start = parseSubtitleTime(parts[startIdx]);
+            double end = parseSubtitleTime(parts[endIdx]);
+            String lineText = parts[textIdx];
+            if (parts.length > fieldCount && textIdx == fieldCount - 1) {
+                StringBuilder rest = new StringBuilder(parts[textIdx]);
+                for (int i=fieldCount; i<parts.length; i++) rest.append(",").append(parts[i]);
+                lineText = rest.toString();
+            }
+            lineText = cleanSubtitleLine(lineText);
+            if (end > start && lineText.length() > 0) cues.add(new SubtitleCue(start, end, lineText));
+        }
+        return cues;
+    }
+
+    private String cleanSubtitleLine(String line) {
+        if (line == null) return "";
+        String out = line.replace("\\N", " / ").replace("\\n", " / ").replace("\\h", " ");
+        out = out.replaceAll("\\{[^}]*\\}", "");
+        out = out.replaceAll("<[^>]+>", "");
+        out = out.replaceAll("\\s+", " ").trim();
+        // 过滤 ASS 矢量绘图残留，例如 m 0 0 b 0 0...，避免混进最近字幕
+        if (out.matches("(?i)^[mnlbspc\\s0-9.\\-]+$") && out.matches(".*[0-9].*")) return "";
+        return out;
+    }
+
+    private double parseSubtitleTime(String t) {
+        t = t.trim().replace(',', '.');
+        t = t.replaceAll("[^0-9:.]", "");
+        String[] parts = t.split(":");
+        try {
+            if (parts.length == 3) return Integer.parseInt(parts[0]) * 3600 + Integer.parseInt(parts[1]) * 60 + Double.parseDouble(parts[2]);
+            if (parts.length == 2) return Integer.parseInt(parts[0]) * 60 + Double.parseDouble(parts[1]);
+            return Double.parseDouble(parts[0]);
+        } catch(Exception e) { return 0; }
+    }
+
+    private String subtitleAt(double sec) {
+        if (subtitleCues.size() == 0) return "";
+        double s = sec + 0.15;
+        for (SubtitleCue cue: subtitleCues) {
+            if (s >= cue.start && s <= cue.end + 0.6) return cue.text;
+            if (cue.start > s + 1.0) break;
+        }
+        return "";
+    }
+
+    private String subtitleForContext(double sec) {
+        String cur = subtitleAt(sec);
+        if (cur.length() > 0) return cur;
+        SubtitleCue latest = null;
+        for (SubtitleCue cue: subtitleCues) {
+            if (cue.start <= sec + 0.5 && cue.text.length() > 0) latest = cue;
+            if (cue.start > sec + 0.5) break;
+        }
+        if (latest != null && sec - latest.start <= 10.0) return "刚刚：" + latest.text;
+        return "";
+    }
+
+    private JSONArray recentSubtitleArray(double sec) throws JSONException {
+        JSONArray arr = new JSONArray();
+        ArrayList<String> tmp = new ArrayList<>();
+        for (SubtitleCue cue: subtitleCues) {
+            if (cue.start <= sec + 0.5 && cue.text.length() > 0) tmp.add(formatTime((int)cue.start) + " " + cue.text);
+            if (cue.start > sec + 0.5) break;
+        }
+        int from = Math.max(0, tmp.size() - 6);
+        for (int i=from; i<tmp.size(); i++) arr.put(tmp.get(i));
+        return arr;
+    }
+
+    private void updateViewingContext(boolean force) {
+        double sec = outboundPositionMs() / 1000.0;
+        String cur = subtitleAt(sec);
+        String contextCur = subtitleForContext(sec);
+        lastContextSubtitle = contextCur;
+        if (subtitleOverlay != null) {
+            subtitleOverlay.setText(cur);
+            subtitleOverlay.setVisibility(cur.length() > 0 ? View.VISIBLE : View.GONE);
+        }
+        if (contextState != null) contextState.setText(contextStatusText());
+        updateServicePrefs();
+    }
+
+    private void sendCinemaContext(boolean force) {
+        if (!contextAutoSync || roomId.length() == 0 || serverUrl.length() == 0) return;
+        int sec = outboundPositionMs() / 1000;
+        String cur = subtitleForContext(sec);
+        if (!force && sec == lastContextSecond && cur.equals(lastSentContextSubtitle)) return;
+        if (!force && sec % 5 != 0 && cur.equals(lastSentContextSubtitle)) return;
+        lastContextSecond = sec;
+        lastSentContextSubtitle = cur;
+        lastContextSubtitle = cur;
+        if (contextState != null) contextState.setText(contextStatusText());
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("actor", name);
+                body.put("assistantName", aiName());
+                body.put("currentTime", outboundPositionMs()/1000.0);
+                body.put("duration", video == null ? 0 : Math.max(0, video.getDuration()/1000.0));
+                body.put("paused", video == null || !video.isPlaying());
+                if (movieTitle.length() > 0) body.put("title", movieTitle);
+                if (fileName.length() > 0) body.put("fileName", fileName);
+                body.put("currentSubtitle", cur);
+                body.put("recentSubtitles", recentSubtitleArray(sec));
+                body.put("observedAt", new Date().toString());
+                postJson("/api/rooms/" + roomId + "/context", body, true);
+            } catch(Exception ignored) {}
+        }).start();
+    }
+
     private void pickVideo() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("video/*");
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         startActivityForResult(i, 1001);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 1002 && resultCode == RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch(Exception ignored) {}
+            loadSubtitleFile(uri);
+            return;
+        }
         if (requestCode == 1001 && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
             try {
@@ -1195,6 +1907,8 @@ private final Runnable poller = new Runnable() {
             } catch(Exception ignored) {}
             fileName = getName(uri);
             movieTitle = fileName.replaceFirst("\\.[^.]+$", "");
+            currentMovieUri = uri.toString();
+            rememberMovieInLibrary(uri, movieTitle, fileName);
             video.setVideoURI(uri);
             View e = videoFrame.findViewWithTag("video_overlay");
             if (e != null) e.setVisibility(View.GONE);
@@ -1220,11 +1934,13 @@ private final Runnable poller = new Runnable() {
     }
 
     private void sendMovieInfo() {
+        updateServicePrefs();
         if (roomId.length() == 0 || serverUrl.length() == 0 || fileName.length() == 0) return;
         new Thread(() -> {
             try {
                 JSONObject body = new JSONObject();
                 body.put("actor", name);
+                body.put("assistantName", aiName());
                 body.put("title", movieTitle);
                 body.put("fileName", fileName);
                 body.put("duration", video.getDuration() / 1000.0);
@@ -1238,12 +1954,15 @@ private final Runnable poller = new Runnable() {
 
     private void sendPlayback(boolean force) {
         if (roomId.length() == 0 || serverUrl.length() == 0 || applyingRemote) return;
-        int pos = video.getCurrentPosition();
-        boolean paused = !video.isPlaying();
+        rememberPlaybackPosition();
+        int pos = outboundPositionMs();
+        boolean paused = video == null || !video.isPlaying();
+        updateServicePrefs();
         new Thread(() -> {
             try {
                 JSONObject body = new JSONObject();
                 body.put("actor", name);
+                body.put("assistantName", aiName());
                 body.put("currentTime", pos / 1000.0);
                 body.put("duration", Math.max(0, video.getDuration() / 1000.0));
                 body.put("paused", paused);
@@ -1275,6 +1994,7 @@ private final Runnable poller = new Runnable() {
             try {
                 JSONObject body = new JSONObject();
                 body.put("name", name);
+                body.put("assistantName", aiName());
                 body.put("text", out);
                 postJson("/api/rooms/" + roomId + "/message", body, true);
             } catch(Exception e) { runOnUiThread(() -> toast("发送失败")); }
@@ -1307,6 +2027,7 @@ private final Runnable poller = new Runnable() {
             try {
                 JSONObject body = new JSONObject();
                 body.put("name", name);
+                body.put("assistantName", aiName());
                 body.put("text", text);
                 body.put("type", type);
                 body.put("time", video.getCurrentPosition()/1000.0);
@@ -1334,6 +2055,11 @@ private final Runnable poller = new Runnable() {
                 roomTitle.setText("正在放映 · " + room.optString("title"));
             }
             if (room.optString("partner").length() > 0) invitePartner = room.optString("partner", invitePartner);
+            if (room.optString("assistantName").length() > 0) {
+                assistantName = room.optString("assistantName", aiName());
+                savePrefs();
+                updateServicePrefs();
+            }
             if (room.optString("mood").length() > 0) inviteMood = room.optString("mood", inviteMood);
             if (room.optString("inviteNote").length() > 0) inviteNote = room.optString("inviteNote", inviteNote);
             if (inviteSummary != null) inviteSummary.setText(invitationText());
@@ -1343,8 +2069,16 @@ private final Runnable poller = new Runnable() {
             double t = room.optDouble("currentTime", 0);
             boolean paused = room.optBoolean("paused", true);
             syncState.setText((paused ? "已同步暂停" : "同步播放中") + " · " + formatTime((int)t));
+            JSONObject ctx = room.optJSONObject("context");
+            if (ctx != null && contextState != null && !contextAutoSync) {
+                String remoteSubtitle = ctx.optString("currentSubtitle", "");
+                if (remoteSubtitle.length() > 0) contextState.setText("远端字幕：" + remoteSubtitle);
+            }
             if (video.getDuration() > 0) {
                 int remoteMs = (int)(t * 1000);
+                if (remoteMs < 1000 && lastStablePositionMs > 5000 && System.currentTimeMillis() - lastStablePositionAt < 15000) {
+                    remoteMs = lastStablePositionMs;
+                }
                 if (Math.abs(video.getCurrentPosition() - remoteMs) > 1800) {
                     applyingRemote = true;
                     safeSeekTo(video, remoteMs);
@@ -1653,6 +2387,9 @@ private final Runnable poller = new Runnable() {
             return;
         }
 
+        rememberPlaybackPosition();
+        final int enterPosMs = outboundPositionMs();
+        final boolean enterPlaying = video.isPlaying();
         try {
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         } catch (Exception ignored) {}
@@ -1681,67 +2418,104 @@ private final Runnable poller = new Runnable() {
         oldParent.removeView(video);
         host.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         videoFrame = host;
+        try {
+            video.seekTo(enterPosMs);
+            if (enterPlaying) video.start();
+        } catch (Exception ignored) {}
 
         root.addView(host, new FrameLayout.LayoutParams(-1, -1));
 
-        LinearLayout panel = vbox();
-        panel.setPadding(dp(10), dp(10), dp(10), dp(10));
-        panel.setBackground(round(color("#CC111827"), 22));
+        final LinearLayout panel = vbox();
+        panel.setPadding(dp(12), dp(12), dp(12), dp(12));
+        panel.setBackground(round(color("#DD111827"), 22));
 
-        TextView title = tv("观影弹幕间", 15, Typeface.BOLD);
+        TextView title = tv("映屿弹幕间", 15, Typeface.BOLD);
         title.setTextColor(Color.WHITE);
         panel.addView(title);
 
-        EditText input = input("边看边说点什么…", "");
-        input.setTextColor(Color.WHITE);
-        input.setHintTextColor(color("#CBD5E1"));
-        add(panel, input, -1, 42, 8);
+        TextView drawerHint = small("聊天和弹幕分开；这里也能同步进度、" + aiPeekText() + "画面。");
+        drawerHint.setTextColor(color("#E5E7EB"));
+        panel.addView(drawerHint);
+
+        EditText talkInput = input("聊天：聊天：说一句…", "");
+        talkInput.setTextColor(Color.WHITE);
+        talkInput.setHintTextColor(color("#CBD5E1"));
+        add(panel, talkInput, -1, 42, 8);
+
+        Button sendChat = btn("发送聊天", true);
+        add(panel, sendChat, -1, 40, 6);
+
+        EditText dmInput = input("弹幕：让它飘过银幕…", "");
+        dmInput.setTextColor(Color.WHITE);
+        dmInput.setHintTextColor(color("#CBD5E1"));
+        add(panel, dmInput, -1, 42, 10);
+
+        Button sendDm = btn("发送弹幕", false);
+        add(panel, sendDm, -1, 40, 6);
 
         LinearLayout row = hbox();
-        Button chat = btn("聊天", true);
-        Button dm = btn("弹幕", false);
+        Button syncNow = btn("同步", false);
+        Button peek = btn(aiPeekText(), false);
         Button close = btn("退出", false);
-
-        row.addView(chat, new LinearLayout.LayoutParams(0, dp(40), 1));
-
-        LinearLayout.LayoutParams lpDm = new LinearLayout.LayoutParams(0, dp(40), 1);
-        lpDm.setMargins(dp(6), 0, 0, 0);
-        row.addView(dm, lpDm);
-
+        row.addView(syncNow, new LinearLayout.LayoutParams(0, dp(40), 1));
+        LinearLayout.LayoutParams lpPeek = new LinearLayout.LayoutParams(0, dp(40), 1);
+        lpPeek.setMargins(dp(6), 0, 0, 0);
+        row.addView(peek, lpPeek);
         LinearLayout.LayoutParams lpClose = new LinearLayout.LayoutParams(0, dp(40), 1);
         lpClose.setMargins(dp(6), 0, 0, 0);
         row.addView(close, lpClose);
+        add(panel, row, -1, 40, 10);
 
-        add(panel, row, -1, 40, 8);
+        TextView drawerStatus = small("弹幕间已准备好。");
+        drawerStatus.setTextColor(color("#E5E7EB"));
+        drawerStatus.setBackground(round(color("#33111111"), 16));
+        drawerStatus.setPadding(dp(10), dp(8), dp(10), dp(8));
+        add(panel, drawerStatus, -1, -2, 8);
 
-        chat.setOnClickListener(v -> {
+        sendChat.setOnClickListener(v -> {
             if (chatInput != null) {
-                chatInput.setText(input.getText().toString());
+                chatInput.setText(talkInput.getText().toString());
                 sendMessage(false);
-                input.setText("");
+                talkInput.setText("");
+                drawerStatus.setText("聊天已发送。");
             }
         });
 
-        dm.setOnClickListener(v -> {
+        sendDm.setOnClickListener(v -> {
             if (chatInput != null) {
-                chatInput.setText(input.getText().toString());
+                chatInput.setText(dmInput.getText().toString());
                 sendMessage(true);
-                input.setText("");
+                dmInput.setText("");
+                drawerStatus.setText("弹幕已发送。已和聊天分开记录。");
             }
+        });
+
+        syncNow.setOnClickListener(v -> {
+            rememberPlaybackPosition();
+            sendPlayback(true);
+            sendCinemaContext(true);
+            drawerStatus.setText("进度已同步：" + formatTime(outboundPositionMs()/1000));
+            toast("已同步当前进度");
+        });
+
+        peek.setOnClickListener(v -> {
+            requestLocalScreenshotNow();
+            drawerStatus.setText("已请求" + aiName() + "看一眼，横屏保持几秒让无障碍上传。");
         });
 
         close.setOnClickListener(v -> d.dismiss());
 
-        FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(dp(320), -2, Gravity.RIGHT | Gravity.BOTTOM);
-        pp.setMargins(0, 0, dp(10), dp(10));
+        FrameLayout.LayoutParams pp = new FrameLayout.LayoutParams(dp(350), -2, Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        pp.setMargins(0, 0, dp(12), 0);
+        panel.setVisibility(View.GONE);
         root.addView(panel, pp);
 
         final android.widget.TextView fullscreenChatToggle = new android.widget.TextView(this);
-        fullscreenChatToggle.setText("收起弹幕间");
+        fullscreenChatToggle.setText(">");
         fullscreenChatToggle.setTextColor(android.graphics.Color.WHITE);
-        fullscreenChatToggle.setTextSize(13);
+        fullscreenChatToggle.setTextSize(26);
         fullscreenChatToggle.setGravity(android.view.Gravity.CENTER);
-        fullscreenChatToggle.setPadding(dp(12), dp(7), dp(12), dp(7));
+        fullscreenChatToggle.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         android.graphics.drawable.GradientDrawable fullscreenChatToggleBg = new android.graphics.drawable.GradientDrawable();
         fullscreenChatToggleBg.setColor(0xAA111827);
@@ -1753,22 +2527,18 @@ private final Runnable poller = new Runnable() {
         }
 
         android.widget.FrameLayout.LayoutParams fullscreenChatToggleLp =
-                new android.widget.FrameLayout.LayoutParams(
-                        android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
-                        android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
-                        android.view.Gravity.TOP | android.view.Gravity.RIGHT
-                );
-        fullscreenChatToggleLp.setMargins(0, dp(14), dp(14), 0);
+                new android.widget.FrameLayout.LayoutParams(dp(44), dp(74), android.view.Gravity.RIGHT | android.view.Gravity.CENTER_VERTICAL);
+        fullscreenChatToggleLp.setMargins(0, 0, 0, 0);
         root.addView(fullscreenChatToggle, fullscreenChatToggleLp);
         fullscreenChatToggle.bringToFront();
 
         fullscreenChatToggle.setOnClickListener(v -> {
             if (panel.getVisibility() == android.view.View.VISIBLE) {
                 panel.setVisibility(android.view.View.GONE);
-                fullscreenChatToggle.setText("打开弹幕间");
+                fullscreenChatToggle.setText(">");
             } else {
                 panel.setVisibility(android.view.View.VISIBLE);
-                fullscreenChatToggle.setText("收起弹幕间");
+                fullscreenChatToggle.setText("<");
                 panel.bringToFront();
                 fullscreenChatToggle.bringToFront();
             }
@@ -1779,12 +2549,18 @@ private final Runnable poller = new Runnable() {
 
         d.setOnDismissListener(x -> {
             fullscreenDanmakuRoot = null;
+            final int exitPosMs = video.getCurrentPosition();
+            final boolean exitPlaying = video.isPlaying();
             try {
                 ViewGroup p = (ViewGroup) video.getParent();
                 if (p != null) p.removeView(video);
                 originFrame.addView(video, 0, new FrameLayout.LayoutParams(-1, -1));
                 videoFrame = originFrame;
+                forceRestoreAfterFullscreen(exitPosMs, exitPlaying);
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+                forceRestoreAfterFullscreen(exitPosMs, exitPlaying);
+                if (exitPosMs > 1000) sendPlayback(true);
+                sendCinemaContext(true);
             } catch (Exception ignored) {}
         });
 
