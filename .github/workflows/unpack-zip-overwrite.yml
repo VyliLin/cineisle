@@ -6,7 +6,7 @@ on:
       zip_file:
         description: "仓库里的 ZIP 文件路径，例如 cineisle-update.zip"
         required: true
-        default: "cineisle-update.zip"
+        default: "cineisle-pwa-android-v0.4.0.zip"
       commit_message:
         description: "提交信息"
         required: true
@@ -31,6 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           ZIP_FILE="${{ github.event.inputs.zip_file }}"
+
           if [ ! -f "$ZIP_FILE" ]; then
             echo "找不到 ZIP：$ZIP_FILE"
             echo "请先把 ZIP 上传/提交到仓库根目录，或在运行 workflow 时填写正确路径。"
@@ -43,13 +44,16 @@ jobs:
 
           SRC=".unpack-tmp"
           TOP_COUNT=$(find .unpack-tmp -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
-          if [ "$TOP_COUNT" = "1" ] && [ -d "$(find .unpack-tmp -mindepth 1 -maxdepth 1 -type d | head -n 1)" ]; then
-            SRC="$(find .unpack-tmp -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          TOP_DIR="$(find .unpack-tmp -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)"
+
+          if [ "$TOP_COUNT" = "1" ] && [ -n "$TOP_DIR" ] && [ -d "$TOP_DIR" ]; then
+            SRC="$TOP_DIR"
           fi
 
           rsync -a --delete \
-            --exclude ".git" \
-            --exclude ".unpack-tmp" \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude ".unpack-tmp/" \
             --exclude "$ZIP_FILE" \
             "$SRC"/ ./
 
@@ -63,9 +67,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+
           if git diff --cached --quiet; then
             echo "没有检测到文件变化。"
             exit 0
           fi
+
           git commit -m "${{ github.event.inputs.commit_message }}"
           git push
