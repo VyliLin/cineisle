@@ -8,16 +8,18 @@
 
 映屿 CineIsle 是一个轻量的 watch-together 工具。两个人各自在自己的手机里导入本地视频文件，服务端只负责同步房间状态、播放进度、聊天、弹幕、时间轴笔记、观影卡片、字幕上下文和低频画面截图。
 
-**它不提供任何影视资源，也不会上传你的视频文件。** 视频文件只保留在你的手机里；截图功能也需要你在 App 里主动开启，并且只在映屿前台低频上传。
+**它不提供任何影视资源，也不会上传你的视频文件。** 视频文件只保留在你的设备里；截图功能也需要用户主动触发或在 Android App 内主动开启。
 
-公开版支持在设置里填写 **AI 名字**。填写后，App 内所有「观影助手」相关文案会变成你自己的 AI 名字，例如「小G感知」「给小G看一眼」。创建房间、同步进度、字幕上下文和 MCP 截图请求也会同步这个名字。
+公开版支持在设置里填写 **AI 名字**。填写后，App / PWA 内和 MCP 截图请求会同步这个名字，例如「给小G看一眼」「给林澈看一眼」。
 
-适合：
+## 本次更新：v0.4.0 PWA + Android APK
 
-- 两个人远程一起看同一部本地视频
-- 想留下观影票根、台词摘录和观后感
-- 想让 AI 通过 MCP 参与观影：发弹幕、记笔记、读取字幕、请求“看一眼”画面
-- 想自部署一个只属于自己的小型观影房间
+- 新增 **iOS Web/PWA 入口**：iPhone 用 Safari 打开后端地址，添加到主屏幕即可像 App 一样使用。
+- Android 仍保留原生 App 与 GitHub Actions 自动打包 APK。
+- 新增 PWA 文件：`server/public/index.html`、`app.css`、`app.js`、`manifest.webmanifest`、`sw.js`、图标。
+- PWA 支持创建/加入房间、本地导入影片、播放/暂停/进度同步、聊天、弹幕、字幕导入、时间轴笔记、观影卡片、本机影厅记录、手动上传当前视频帧给 AI 看一眼。
+- 新增 GitHub Actions：源码 ZIP 打包、上传 ZIP 后解压覆盖旧仓库。
+- README 更新：保留 Render 一键部署、局域网部署、Android APK、MCP 工具教程，并补充 iOS PWA 使用说明。
 
 ## 功能
 
@@ -25,18 +27,16 @@
 - 本地导入视频，不上传视频文件
 - 播放、暂停、进度同步
 - 聊天与弹幕分离
-- 横屏右侧抽屉：默认只露出 `>`，点开后可聊天、发弹幕、同步进度、请求截图
+- 横屏右侧抽屉：Android 原生 App 默认只露出 `>`，点开后可聊天、发弹幕、同步进度、请求截图
+- iOS/PWA：手机浏览器响应式界面，支持添加到主屏幕
 - 观影邀请卡：电影名、观影人、氛围、开场备注
 - 时间轴笔记：每条笔记可绑定当前播放时间
 - 金句摘录：手动记录台词/高光瞬间
 - 三套观影卡片模板：电影票根、片尾回执、观影明信片
-- 档案馆：收藏每一次观影卡片
-- 影厅：保存本机导入过的影片 URI、片名和上次进度，方便下次继续看
-- 多主题：奶油白、夜航蓝、星河紫、雾岛绿、胶片黑、暮光紫
+- 档案馆/影厅：保存本机导入过的影片信息和上次进度
 - 字幕感知：支持导入 `.srt` / `.vtt` / `.ass` / `.ssa` 字幕，按播放进度同步当前字幕与最近字幕
 - ASS/SSA 字幕兼容：会尽量去掉样式标签和绘图代码，只保留台词
-- 字幕兜底：当前字幕为空时，后端会尽量使用最近一句字幕作为上下文
-- 低频画面截图：开启无障碍服务后，可低频上传当前画面截图
+- 低频画面截图：Android App 开启无障碍服务后可低频上传；PWA 可手动截取当前本地视频帧上传
 - 最近画面时间线：后端保留最近 5 张截图摘要，方便 AI 理解刚刚发生了什么
 - MCP 接口：让 ChatGPT / 其他支持 MCP 的 AI 读房间、发弹幕、控制播放、请求截图、读取观影上下文、生成卡片
 
@@ -44,10 +44,18 @@
 
 ```text
 .
-├─ android/              # Android App 源码
-├─ server/               # Node.js 后端 + MCP 接口
-├─ render.yaml           # Render 一键部署配置
-├─ .github/workflows/    # GitHub Actions 自动打包 APK
+├─ android/                       # Android 原生 App 源码，Actions 生成 APK
+├─ server/                        # Node.js 后端 + Web/PWA + MCP 接口
+│  ├─ public/                     # iOS Safari / Web 用户访问的 PWA 前端
+│  ├─ server.js                   # API + MCP 服务
+│  ├─ package.json
+│  └─ render.yaml                 # Render 从 server/ 单独部署时可用
+├─ docs/                          # 补充教程
+├─ render.yaml                    # Render 一键部署配置，rootDir 指向 server
+├─ .github/workflows/
+│  ├─ build-debug-apk.yml         # Android APK 自动打包
+│  ├─ package-source-zip.yml      # 打包源码 ZIP
+│  └─ unpack-zip-overwrite.yml    # 上传 ZIP 后解压覆盖仓库
 └─ README.md
 ```
 
@@ -73,7 +81,7 @@ README 顶部有按钮：
 Deploy to Render
 ```
 
-点开后，Render 会读取 `render.yaml`，自动创建一个 Web Service。
+点开后，Render 会读取根目录 `render.yaml`，自动创建一个 Web Service，并把服务根目录设为 `server`。
 
 如果你把仓库名改了，需要把 README 顶部按钮里的链接改成你的仓库地址，例如：
 
@@ -101,25 +109,47 @@ CINEISLE_TOKEN
 https://cineisle-server.onrender.com
 ```
 
-打开这个地址，能看到 `映屿 CineIsle Server` 页面，就说明后端成功了。
+打开这个地址，会看到 **映屿 CineIsle Web/PWA** 页面。打开：
 
-### 5. App 里填写后端地址
+```text
+https://你的 Render 地址/api/health
+```
 
-打开 Android App → 设置：
+返回 `ok: true` 就说明后端成功了。
+
+### 5. Android App / iOS PWA 填写后端地址
+
+Android App 设置里填写：
 
 ```text
 后端地址：https://你的 Render 地址
 Token：你的 CINEISLE_TOKEN
 昵称：观影人A / 你自己的名字
+AI 名字：观影助手 / 你自己的 AI 名字
 ```
 
-另一台手机也填同一个后端地址和 Token。
+iOS 用户直接用 Safari 打开 Render 地址，在页面内填写同样的后端地址和 Token。因为 PWA 和后端在同一个 Render 地址上，后端地址默认会自动填当前网址。
 
 ### 6. 创建房间并导入视频
 
-一台手机创建房间，另一台手机输入房间号加入。
+一台设备创建房间，另一台设备输入房间号加入。
 
 两边都点「导入影片」，选择本地同一部视频文件。之后就可以同步播放、暂停、跳转、发弹幕和写笔记。
+
+---
+
+## iOS 使用方式：Safari 添加到主屏幕
+
+不需要 Apple Developer 账号，不需要 TestFlight。
+
+1. 用 iPhone 的 **Safari** 打开你的 Render 地址。
+2. 点底部分享按钮。
+3. 选择「添加到主屏幕」。
+4. 桌面出现「映屿」图标后，从桌面打开。
+5. 填写后端地址、Token、昵称和 AI 名字。
+6. 创建/加入房间，导入本地影片和字幕。
+
+注意：iOS 浏览器不能像 Android App 一样拿到全局系统权限。PWA 版不会控制别的 App，也不会后台偷偷截图；它只在映屿页面里工作。浏览器也不能永久保存本地视频文件本体，所以重新打开后通常需要重新选择影片。
 
 ---
 
@@ -186,9 +216,9 @@ Linux：
 ip addr
 ```
 
-### 4. 手机 App 填局域网地址
+### 4. 手机填写局域网地址
 
-手机和电脑必须连同一个 Wi‑Fi。App 设置里填写：
+手机和电脑必须连同一个 Wi‑Fi。Android App 或 iOS Safari 页面里填写：
 
 ```text
 后端地址：http://电脑IP:8787
@@ -215,16 +245,22 @@ http://电脑IP:8787
 
 ## 用 GitHub Actions 自动打包
 
-项目自带 `.github/workflows/build-debug-apk.yml`。推送到 GitHub 后，进入：
+项目自带：
 
 ```text
-Actions → Build debug APK → Run workflow
+.github/workflows/build-debug-apk.yml
+```
+
+推送到 GitHub 后，进入：
+
+```text
+Actions → Build Android APK → Run workflow
 ```
 
 构建成功后，在 Artifacts 下载：
 
 ```text
-cineisle-debug-apk
+cineisle-android-debug-apk
 ```
 
 里面会有：
@@ -233,7 +269,7 @@ cineisle-debug-apk
 app-debug.apk
 ```
 
-把 APK 发到手机安装即可。
+把 APK 发到 Android 手机安装即可。
 
 ## 本地打包
 
@@ -251,6 +287,68 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 ---
 
+# GitHub 工作流：上传 ZIP 覆盖旧仓库
+
+适合你在 ChatGPT 里拿到新版 ZIP 后，把旧仓库直接更新。
+
+### 第一次使用
+
+先把新版 ZIP 里的 `.github/workflows/unpack-zip-overwrite.yml` 合进仓库。之后就可以长期用这个工作流更新。
+
+### 使用步骤
+
+1. 把新版 ZIP 上传/提交到仓库根目录，例如：
+
+```text
+cineisle-update.zip
+```
+
+2. 打开 GitHub：
+
+```text
+Actions → Unpack ZIP and overwrite repo → Run workflow
+```
+
+3. `zip_file` 填：
+
+```text
+cineisle-update.zip
+```
+
+4. 运行后，workflow 会自动：
+
+```text
+解压 ZIP → 去掉多余根目录 → 覆盖仓库文件 → 删除 ZIP → 提交并 push
+```
+
+如果 ZIP 里只有一个总文件夹，比如 `cineisle-main/`，workflow 会自动识别并把里面的内容覆盖到仓库根目录，不会多套一层文件夹。
+
+---
+
+# GitHub 工作流：打包源码 ZIP
+
+项目自带：
+
+```text
+.github/workflows/package-source-zip.yml
+```
+
+进入：
+
+```text
+Actions → Package source ZIP → Run workflow
+```
+
+运行成功后，在 Artifacts 下载：
+
+```text
+cineisle-source-zip
+```
+
+它会自动排除：`.git`、`node_modules`、Android build 产物、已有 ZIP 等临时文件。
+
+---
+
 # 字幕感知与画面截图
 
 ## 导入字幕
@@ -263,14 +361,14 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 建议优先选择简体中文或中英双语字幕。ASS/SSA 字幕会自动解析 `Dialogue:` 台词，并尽量清理样式标签、位置代码和绘图代码。
 
-## 开启低频截图
+## Android 低频截图
 
 低频截图需要两步：
 
 1. 在 App 里打开「自动截图 ON」；
 2. 到系统无障碍设置里开启「映屿画面同步」。
 
-开启后，App 只会在映屿处于前台时低频上传画面截图。横屏里也可以点右侧抽屉的「给{AI 名字}看一眼」来请求立即截图一次。AI 名字可在 App 设置里填写，例如小G、Claude、观影搭子；不填时默认为「观影助手」。
+开启后，App 只会在映屿处于前台时低频上传画面截图。横屏里也可以点右侧抽屉的「给{AI 名字}看一眼」来请求立即截图一次。
 
 如果截图没有出现，可以先看 App 里的「截图状态」提示，常见情况包括：
 
@@ -282,6 +380,16 @@ HTTP 413：截图太大
 已请求截图，等待上传
 截图已上传
 ```
+
+## iOS/PWA 手动看一眼
+
+PWA 不能调用 iOS 全局截图权限，但可以在页面里对当前导入的本地视频帧做一次手动截图上传。点：
+
+```text
+给 AI 看一眼
+```
+
+如果浏览器限制当前视频帧读取，页面会提示失败；这种情况不影响播放同步、聊天、弹幕、字幕和笔记。
 
 ---
 
@@ -340,10 +448,11 @@ https://cineisle-server.onrender.com/mcp?token=change-me
 
 - CineIsle 不提供影视资源。
 - CineIsle 不上传本地视频文件。
-- 「影厅」只保存本机影片 URI、片名和上次进度。
+- 「影厅」只保存本机影片信息、片名和上次进度。
 - 后端会保存房间状态、聊天、弹幕、笔记、观影卡片、字幕上下文和最近 5 张截图摘要。
-- 截图功能默认不会偷偷开启，需要用户在 App 内打开开关，并启用系统无障碍服务。
-- 截图只在映屿 App 前台时上传。
+- Android 截图功能默认不会偷偷开启，需要用户在 App 内打开开关，并启用系统无障碍服务。
+- Android 截图只在映屿 App 前台时上传。
+- iOS/PWA 不具备全局控制或后台截图权限，只能在映屿页面内工作。
 - Render 免费服务可能会休眠，首次打开可能需要等待几十秒。
 - 公开部署时请设置 `CINEISLE_TOKEN`，不要把 Token 发到公开评论区或截图里。
 
@@ -354,7 +463,7 @@ https://cineisle-server.onrender.com/mcp?token=change-me
 当前公开版：
 
 ```text
-CineIsle Public v0.3.2
+CineIsle Public v0.4.0 PWA
 ```
 
 公开版已移除私人称呼和私密标识，适合开源、自部署和二次定制。
