@@ -106,8 +106,8 @@ function auth(req,res,next){
 }
 
 app.get("/", (req,res)=>res.sendFile(__dirname + "/public/index.html"));
-app.get("/server-info", (req,res)=>res.json({ok:true, app:"CineIsle Server", version:"0.4.0-pwa", rooms:rooms.size, tokenRequired:Boolean(TOKEN), mcp:"/mcp", health:"/api/health", time:now()}));
-app.get("/api/health",(req,res)=>res.json({ok:true, app:"CineIsle Server", version:"0.4.0-pwa", rooms:rooms.size, tokenRequired:Boolean(TOKEN), time:now()}));
+app.get("/server-info", (req,res)=>res.json({ok:true, app:"CineIsle Server", version:"0.4.1-render-fix", rooms:rooms.size, tokenRequired:Boolean(TOKEN), mcp:"/mcp", health:"/api/health", time:now()}));
+app.get("/api/health",(req,res)=>res.json({ok:true, app:"CineIsle Server", version:"0.4.1-render-fix", rooms:rooms.size, tokenRequired:Boolean(TOKEN), time:now()}));
 
 app.post("/api/rooms",(req,res)=>{
   const r = ensure(code());

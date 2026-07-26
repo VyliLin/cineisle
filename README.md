@@ -12,7 +12,7 @@
 
 公开版支持在设置里填写 **AI 名字**。填写后，App / PWA 内和 MCP 截图请求会同步这个名字，例如「给小G看一眼」「给林澈看一眼」。
 
-## 本次更新：v0.4.0 PWA + Android APK
+## 本次更新：v0.4.1 Render 部署修复 + PWA + Android APK
 
 - 新增 **iOS Web/PWA 入口**：iPhone 用 Safari 打开后端地址，添加到主屏幕即可像 App 一样使用。
 - Android 仍保留原生 App 与 GitHub Actions 自动打包 APK。
@@ -20,6 +20,7 @@
 - PWA 支持创建/加入房间、本地导入影片、播放/暂停/进度同步、聊天、弹幕、字幕导入、时间轴笔记、观影卡片、本机影厅记录、手动上传当前视频帧给 AI 看一眼。
 - 新增 GitHub Actions：源码 ZIP 打包、上传 ZIP 后解压覆盖旧仓库。
 - README 更新：保留 Render 一键部署、局域网部署、Android APK、MCP 工具教程，并补充 iOS PWA 使用说明。
+- 修复 Render 一键部署稳定性：移除带内部源地址的 `package-lock.json`，强制使用 npm 官方 registry，并在构建阶段检查 `express` / `cors` 是否安装成功。
 
 ## 功能
 
@@ -83,6 +84,8 @@ Deploy to Render
 
 点开后，Render 会读取根目录 `render.yaml`，自动创建一个 Web Service，并把服务根目录设为 `server`。
 
+本版已经把一键部署参数写在根目录 `render.yaml` 里：Root Directory 会自动指向 `server`，Build Command 会使用 npm 官方源重新安装依赖，并检查 `express` / `cors` 是否可用。一般情况下不需要手动改 Render 设置。
+
 如果你把仓库名改了，需要把 README 顶部按钮里的链接改成你的仓库地址，例如：
 
 ```markdown
@@ -116,6 +119,28 @@ https://你的 Render 地址/api/health
 ```
 
 返回 `ok: true` 就说明后端成功了。
+
+### Render 部署失败排查
+
+如果日志里出现：
+
+```text
+npm error Exit handler never called!
+Error: Cannot find module 'express'
+```
+
+通常不是你操作错了，而是依赖没有成功安装。请确认你使用的是 v0.4.1 或更新版本，并优先使用根目录的 `render.yaml` 一键部署。
+
+手动配置时请保持：
+
+```text
+Root Directory: server
+Build Command: npm install --package-lock=false --no-audit --no-fund && npm run check
+Start Command: npm start
+NODE_VERSION: 20
+```
+
+本项目公开包不再附带 `server/package-lock.json`，避免旧锁文件里的私有 npm 镜像地址导致 Render 无法下载依赖。
 
 ### 5. Android App / iOS PWA 填写后端地址
 
@@ -167,7 +192,7 @@ iOS 用户直接用 Safari 打开 Render 地址，在页面内填写同样的后
 
 ```bash
 cd server
-npm install
+npm install --package-lock=false --no-audit --no-fund
 ```
 
 Windows PowerShell：
